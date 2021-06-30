@@ -27,14 +27,14 @@ class BifrostWatcher(object):
         self.bifrost_table = {}
 
     def post_run_cell(self, result):
-        ast_tree = ast.parse(result.info.raw_cell)
-        #TODO: check if there is an error
+        if not result.error_in_exec:
+            ast_tree = ast.parse(result.info.raw_cell)
 
-        callVisitor = CallVisitor()
-        callVisitor.visit(ast_tree)
-        print(f"args={callVisitor.args}")
-        # assignVisitor = AssignVisitor()
-        # assignVisitor.visit(ast_tree)
+            callVisitor = CallVisitor()
+            callVisitor.visit(ast_tree)
+            print(f"args={callVisitor.args}")
+            # assignVisitor = AssignVisitor()
+            # assignVisitor.visit(ast_tree)
         
         # for new_df in assignVisitor.new_dfs:
         #     columns = get_ipython().run_cell(new_df + '.columns').result
