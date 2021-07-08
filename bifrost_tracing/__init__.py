@@ -4,7 +4,7 @@ __author__ = """Jay Ahn"""
 __email__ = 'aju960219@gmail.com'
 __version__ = '0.1.0'
 
-from .bifrost_tracing import BifrostTracing, BifrostWatcher
+from src.bifrost_tracing import BifrostTracing, BifrostWatcher
 from IPython import get_ipython
 
 
