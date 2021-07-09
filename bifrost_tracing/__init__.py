@@ -5,15 +5,16 @@ __email__ = 'aju960219@gmail.com'
 __version__ = '0.1.0'
 
 from .bifrost_tracing import BifrostTracing, BifrostWatcher
-from IPython import get_ipython
+# from IPython import get_ipython
 
 
 
 
-def load_ipython_extension(ipython):
-    ipython.register_magics(BifrostTracing)
-    vw = BifrostWatcher(ipython)
-    ipython.events.register('post_run_cell', vw.post_run_cell)
+# def load_ipython_extension(ipython):
+#     ipython.register_magics(BifrostTracing)
+#     vw = BifrostWatcher(ipython)
+#     ipython.events.register('post_run_cell', vw.post_run_cell)
+#     return vw
 
 
-load_ipython_extension(get_ipython())
+# Watcher = load_ipython_extension(get_ipython())
