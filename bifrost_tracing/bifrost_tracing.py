@@ -35,6 +35,15 @@ class BifrostWatcher(object):
             callVisitor = CallVisitor()
             callVisitor.visit(ast_tree)
             print(f"args={callVisitor.args}")
+
+            for arg in callVisitor.args:
+                key, value = arg.split(".")
+                if key in self.bifrost_table and value in self.bifrost_table[key]:
+                    self.bifrost_table[key][value] = self.bifrost_table[key][value] + 1
+                elif key in self.bifrost_table and value not in self.bifrost_table[key]:
+                    self.bifrost_table[key][value] = 1
+                else:
+                    self.bifrost_table[key] = {value: 1}
             # assignVisitor = AssignVisitor()
             # assignVisitor.visit(ast_tree)
 
@@ -57,7 +66,11 @@ class AttributeVisitor(ast.NodeVisitor):
     def visit_Attribute(self, node):
         if isinstance(node, ast.Attribute):
             self.visit(node.value)
-            self.attributes.append(node.attr)
+            if isinstance(node.value, ast.Name):
+                self.attributes.append(node.attr)
+            elif isinstance(node.value, ast.Call):
+                callVisitor = CallVisitor()
+                callVisitor.visit(node.value)
 
 
 class NameVisitor(ast.NodeVisitor):
@@ -99,7 +112,18 @@ class AssignVisitor(ast.NodeVisitor):
 class SubscriptVisitor(ast.NodeVisitor):
     def visit_Subscript(self, node: ast.Subscript):
         self.subscripts = []
-        self.subscripts.append([node.value.id, node.slice.value])
+        if isinstance(node.slice, ast.Tuple):
+            columns = [element.value for element in node.slice.elts]
+            for column in columns:
+                self.subscripts.append[[node.value.id, column]]
+        elif isinstance(node.slice, ast.Compare):
+            left = node.slice.left
+            if isinstance(left, ast.Subscript):
+                self.visit_Subscript(left)
+            else:
+                self.subscripts.append([left.value.id, left.attr])
+        else:
+            self.subscripts.append([node.value.id, node.slice.value])
 
 
 class CallVisitor(ast.NodeVisitor):
@@ -109,32 +133,67 @@ class CallVisitor(ast.NodeVisitor):
     def visit_Module(self, node):
         self.generic_visit(node)
 
+    def visit_Assign(self, node):
+        if isinstance(node.targets[0], ast.Subscript):
+            self.get_args(node.targets[0])
+
+    def visit_Expr(self, node):
+        if isinstance(node.value, ast.Call):
+            self.visit_Call(node.value)
+        elif isinstance(node.value, ast.Subscript):
+            self.get_args(node.value)
+        elif isinstance(node.value, ast.Attribute):
+            if isinstance(node.value.value, ast.Name):
+                self.get_args(node.value.attr, node.value.value.id)
+            elif isinstance(node.value.value, ast.Subscript):
+                self.get_args(node.value.value)
+
     def visit_Call(self, node):
-        # NP cases
         attributeVisitor = AttributeVisitor()
-        attributeVisitor.visit(node.func)
-        print(attributeVisitor.attributes)
-        if attributeVisitor.attributes[0] in [
-            "np.mean",
-            "np.std",
-            "np.sum",
-            "numpy.mean",
-            "numpy.std",
-            "numpy.sum",
-        ]:
-            args = node.args
-            if len(args) != 0:
-                self.get_args(args[0])
-            else:
-                # check keywords
-                keywords = node.keywords
-                for keyword in keywords:
-                    if keyword.arg == "a":
-                        self.get_args(keyword.value)
+        if not isinstance(node.func, ast.Attribute):
+            return
+        if isinstance(node.func.value, ast.Subscript):
+            self.get_args(node.func.value)
+        elif isinstance(node.func.value, ast.Name):
+            func = node.func.value.id
+            # NP case
+            if func in ["np", "numpy"]:
+                attributeVisitor.visit(node.func)
+                if attributeVisitor.attributes[0] in ["mean", "std", "sum"]:
+                    args = node.args
+                    if len(args) != 0:
+                        self.get_args(args[0])
+                    else:
+                        # check keywords
+                        keywords = node.keywords
+                        for keyword in keywords:
+                            if keyword.arg == "a":
+                                self.get_args(keyword.value)
+            # DF/PD case
+            elif func in ["df", "pd"]:
+                attributeVisitor.visit(node.func)
+                attribute = attributeVisitor.attributes[0]
+                if attribute in [
+                    "groupby",
+                    "loc",
+                    "iloc",
+                ]:
+                    args = node.args
+                    if len(args) != 0:
+                        if isinstance(node.func.value, ast.Name):
+                            self.get_args(args[0], node.func.value.id)
+                        else:
+                            self.get_args(args[0])
+                    else:
+                        # check keywords
+                        keywords = node.keywords
+                        for keyword in keywords:
+                            if attribute == "groupby" and keyword.arg == "by":
+                                self.get_args(keyword.value)
 
     """value: either ast.Subscript or ast.Attribute"""
 
-    def get_args(self, value):
+    def get_args(self, value, dataframe=None):
         # case arg is df['one']
         if isinstance(value, ast.Subscript):
             subscriptVisitor = SubscriptVisitor()
@@ -142,13 +201,23 @@ class CallVisitor(ast.NodeVisitor):
             self.args.append(
                 f"{subscriptVisitor.subscripts[0][0]}.{subscriptVisitor.subscripts[0][1]}"
             )
-
         # case arg is df.one
         elif isinstance(value, ast.Attribute):
             attributeVisitor = AttributeVisitor()
+            nameVisitor = NameVisitor()
             attributeVisitor.visit(value)
-            df, column = attributeVisitor.attributes[0].split(".")
+            nameVisitor.visit(value.value)
+            df = nameVisitor.names[0]
+            column = attributeVisitor.attributes[0]
             self.args.append(f"{df}.{column}")
+        elif isinstance(value, ast.List):
+            columns = [element.value for element in value.elts]
+            if dataframe:
+                for column in columns:
+                    self.args.append(f"{dataframe}.{column}")
+        elif isinstance(value, ast.Constant):
+            if dataframe:
+                self.args.append(f"{dataframe}.{value.value}")
 
 
 # some_var = ...bifrost.plot()
@@ -168,7 +237,6 @@ def isnotebook():
 def load_ipython_extension(ipython):
     ipython.register_magics(BifrostTracing)
     vw = BifrostWatcher(ipython)
-    ipython.events.register("pre_run_cell", vw.pre_run_cell)
     ipython.events.register("post_run_cell", vw.post_run_cell)
     return vw
 
