@@ -32,18 +32,25 @@ class BifrostWatcher(object):
         if not result.error_in_exec:
             ast_tree = ast.parse(result.info.raw_cell)
 
-            callVisitor = CallVisitor()
-            callVisitor.visit(ast_tree)
-            print(f"args={callVisitor.args}")
+            try:
+                callVisitor = CallVisitor()
+                callVisitor.visit(ast_tree)
 
-            for arg in callVisitor.args:
-                key, value = arg.split(".")
-                if key in self.bifrost_table and value in self.bifrost_table[key]:
-                    self.bifrost_table[key][value] = self.bifrost_table[key][value] + 1
-                elif key in self.bifrost_table and value not in self.bifrost_table[key]:
-                    self.bifrost_table[key][value] = 1
-                else:
-                    self.bifrost_table[key] = {value: 1}
+                for arg in callVisitor.args:
+                    key, value = arg.split(".")
+                    if key in self.bifrost_table and value in self.bifrost_table[key]:
+                        self.bifrost_table[key][value] = (
+                            self.bifrost_table[key][value] + 1
+                        )
+                    elif (
+                        key in self.bifrost_table
+                        and value not in self.bifrost_table[key]
+                    ):
+                        self.bifrost_table[key][value] = 1
+                    else:
+                        self.bifrost_table[key] = {value: 1}
+            except:
+                return
             # assignVisitor = AssignVisitor()
             # assignVisitor.visit(ast_tree)
 
@@ -190,8 +197,6 @@ class CallVisitor(ast.NodeVisitor):
                         for keyword in keywords:
                             if attribute == "groupby" and keyword.arg == "by":
                                 self.get_args(keyword.value)
-
-    """value: either ast.Subscript or ast.Attribute"""
 
     def get_args(self, value, dataframe=None):
         # case arg is df['one']
