@@ -150,7 +150,7 @@ class SubscriptVisitor(ast.NodeVisitor):
                 self.visit_Subscript(left)
             else:
                 self.subscripts.append([left.value.id, left.attr])
-        else:
+        elif isinstance(node.value, ast.Name) and isinstance(node.slice, ast.Constant):
             self.subscripts.append([node.value.id, node.slice.value])
 
 
@@ -226,9 +226,11 @@ class CallVisitor(ast.NodeVisitor):
         if isinstance(value, ast.Subscript):
             subscriptVisitor = SubscriptVisitor()
             subscriptVisitor.visit(value)
-            self.args.append(
-                f"{subscriptVisitor.subscripts[0][0]}.{subscriptVisitor.subscripts[0][1]}"
-            )
+            if len(subscriptVisitor.subscripts) != 0:
+                self.args.append(
+                    f"{subscriptVisitor.subscripts[0][0]}.{subscriptVisitor.subscripts[0][1]}"
+                )
+
         # case arg is df.one
         elif isinstance(value, ast.Attribute):
             attributeVisitor = AttributeVisitor()
