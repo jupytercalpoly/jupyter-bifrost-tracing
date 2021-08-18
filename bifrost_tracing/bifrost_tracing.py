@@ -59,7 +59,7 @@ class BifrostWatcher(object):
 
             callVisitor = CallVisitor()
             callVisitor.visit(ast_tree)
-            print(f"args={callVisitor.args}")
+            # print(f"args={callVisitor.args}")
 
             for arg in callVisitor.args:
                 key, value = arg.split(".")
