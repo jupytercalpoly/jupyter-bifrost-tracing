@@ -26,7 +26,32 @@ class BifrostWatcher(object):
         self.bifrost_table = {}
         self.plot_output = ""
         self.bifrost_input = ""
+        self.bifrost_input_url = ""
+        self.chart_var = ""
         self.visitor = None
+
+    def pre_run_cell(self, info):
+        ast_tree = ast.parse(info.raw_cell)
+        assignVisitor = AssignVisitor(self.chart_var)
+        assignVisitor.visit(ast_tree)
+        output_var = assignVisitor.output_var
+        bifrost_input = assignVisitor.bifrost_input
+        bifrost_input_url = assignVisitor.bifrost_input_url
+        chart_var = assignVisitor.chart_var
+        if chart_var:
+            self.chart_var = chart_var
+        if output_var:
+            self.plot_output = output_var
+        if bifrost_input:
+            self.bifrost_input = bifrost_input
+            self.bifrost_input_url = ""
+        elif bifrost_input_url:
+            self.bifrost_input = ""
+            self.bifrost_input_url = bifrost_input_url
+        self.visitor = assignVisitor
+        # print(self.plot_output)
+        # print(self.bifrost_input)
+        # print(self.bifrost_input_url)
 
     def post_run_cell(self, result):
         if not result.error_in_exec:
@@ -34,7 +59,7 @@ class BifrostWatcher(object):
 
             callVisitor = CallVisitor()
             callVisitor.visit(ast_tree)
-            print(f"args={callVisitor.args}")
+            # print(f"args={callVisitor.args}")
 
             for arg in callVisitor.args:
                 key, value = arg.split(".")
@@ -44,19 +69,6 @@ class BifrostWatcher(object):
                     self.bifrost_table[key][value] = 1
                 else:
                     self.bifrost_table[key] = {value: 1}
-            # assignVisitor = AssignVisitor()
-            # assignVisitor.visit(ast_tree)
-
-        # for new_df in assignVisitor.new_dfs:
-        #     columns = get_ipython().run_cell(new_df + '.columns').result
-        #     print(columns)
-        #     if new_df in self.bifrost_table:
-        #         columns_set = set(columns)
-        #         table_set = set(self.bifrost_table[new_df].keys())
-        #         for new_col in (columns_set - table_set):
-        #             self.bifrost_table[new_df][new_col] = 0
-        #     else:
-        #         self.bifrost_table[new_df] = {col: 0 for col in columns}
 
 
 class AttributeVisitor(ast.NodeVisitor):
@@ -82,10 +94,12 @@ class NameVisitor(ast.NodeVisitor):
 
 
 class AssignVisitor(ast.NodeVisitor):
-    def __init__(self):
-        self.new_dfs = []
+    def __init__(self, chart_var):
+        self.new_dfs = set()
         self.output_var = None
         self.bifrost_input = None
+        self.bifrost_input_url = None
+        self.chart_var = chart_var
 
     def visit_Module(self, node):
         self.generic_visit(node)
@@ -97,16 +111,30 @@ class AssignVisitor(ast.NodeVisitor):
         names = nameVisitor.names
         attributeVisitor = AttributeVisitor()
         attributeVisitor.visit(node.value)
-        attributes = attributeVisitor.attributes
-        df_mask = [call == "pd.DataFrame" for call in attributes]
-        plot_mask = "bifrost.plot" in attributes
+        attributes = ".".join(attributeVisitor.attributes)
+        # df_mask = "pd.DataFrame" in attributes
+        # plot_mask = "bifrost.plot" in attributes
         if "DataFrame" in attributes:
-            self.new_dfs.extend(names)
-        if "bifrost.plot" in attributes:
+            self.new_dfs.add(*names)
+
+        if (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "Chart"
+        ):
+            self.chart_var = node.targets[0].id
+            if isinstance(node.value.args[0], ast.Constant):
+                self.bifrost_input_url = node.value.args[0].value
+            elif isinstance(node.value.args[0], ast.Name):
+                self.bifrost_input = node.value.args[0].id
+        if (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == self.chart_var
+            and "plot" in attributes
+        ):
             self.output_var = names[-1] if len(names) else None
-            nameVisitor = NameVisitor()
-            nameVisitor.visit(node)
-            self.bifrost_input = nameVisitor.names[-1]
 
 
 class SubscriptVisitor(ast.NodeVisitor):
@@ -122,7 +150,7 @@ class SubscriptVisitor(ast.NodeVisitor):
                 self.visit_Subscript(left)
             else:
                 self.subscripts.append([left.value.id, left.attr])
-        else:
+        elif isinstance(node.value, ast.Name) and isinstance(node.slice, ast.Constant):
             self.subscripts.append([node.value.id, node.slice.value])
 
 
@@ -198,9 +226,11 @@ class CallVisitor(ast.NodeVisitor):
         if isinstance(value, ast.Subscript):
             subscriptVisitor = SubscriptVisitor()
             subscriptVisitor.visit(value)
-            self.args.append(
-                f"{subscriptVisitor.subscripts[0][0]}.{subscriptVisitor.subscripts[0][1]}"
-            )
+            if len(subscriptVisitor.subscripts) != 0:
+                self.args.append(
+                    f"{subscriptVisitor.subscripts[0][0]}.{subscriptVisitor.subscripts[0][1]}"
+                )
+
         # case arg is df.one
         elif isinstance(value, ast.Attribute):
             attributeVisitor = AttributeVisitor()
@@ -237,6 +267,7 @@ def isnotebook():
 def load_ipython_extension(ipython):
     ipython.register_magics(BifrostTracing)
     vw = BifrostWatcher(ipython)
+    ipython.events.register("pre_run_cell", vw.pre_run_cell)
     ipython.events.register("post_run_cell", vw.post_run_cell)
     return vw
 
